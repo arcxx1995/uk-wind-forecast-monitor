@@ -10,6 +10,7 @@
   --border: rgba(11, 11, 11, 0.1);
   --series-1: #2a78d6; /* actual */
   --series-2: #eb6834; /* forecast */
+  --series-3: #1baf7a; /* actual need */
   --neg: #e34948;      /* shortfall (diverging red pole) */
   --pos: #2a78d6;      /* surplus (diverging blue pole) */
   --accent-wash: rgba(42, 120, 214, 0.1);
@@ -26,6 +27,7 @@
     --border: rgba(255, 255, 255, 0.1);
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #199e70;
     --neg: #e66767;
     --pos: #3987e5;
     --accent-wash: rgba(57, 135, 229, 0.15);
@@ -93,3 +95,15 @@ th:first-child, td:first-child { text-align: left; }
 
 .status { color: var(--text-2); padding: 40px 0; text-align: center; }
 .error { color: var(--neg); }
+
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--axis); margin-top: 8px; overflow-x: auto; }
+.tabs a {
+  padding: 8px 14px; color: var(--text-2); text-decoration: none; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; white-space: nowrap;
+}
+.tabs a[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--series-1); }
+.tabs a:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
+table.compare { margin: 0 0 16px; }
+table caption { text-align: left; color: var(--text-2); font-size: 12px; padding-bottom: 4px; }
+details { overflow-x: auto; }
+.note.warn { color: var(--text); background: var(--accent-wash); border-radius: 8px; padding: 8px 12px; }

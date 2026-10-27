@@ -2,6 +2,8 @@ services:
   api:
     build: { context: ., dockerfile: Dockerfile.api }
     ports: ["8000:8000"]
+    environment:
+      PORTFOLIO_SHARE: ${PORTFOLIO_SHARE:-0.05}
   web:
     build: ./web
     ports: ["8080:80"]

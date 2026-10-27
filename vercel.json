@@ -5,7 +5,7 @@
   "buildCommand": "cd web && npm run build",
   "outputDirectory": "web/dist",
   "functions": {
-    "api/index.py": { "includeFiles": "api/data/**" }
+    "api/index.py": { "includeFiles": "monitor/**", "excludeFiles": "{web/**,tests/**,notebooks/**,scripts/**}" }
   },
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }]
 }

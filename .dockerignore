@@ -1,0 +1,5 @@
+.venv
+web
+.git
+notebooks
+tests

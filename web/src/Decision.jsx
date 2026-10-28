@@ -13,8 +13,32 @@ function Tile({ label, value, sub }) {
 
 const MODEL_NAMES = { wind_only: 'wind-only', combined: 'demand + wind', conditional: 'conditional (wind level × peak)' }
 
+const longDay = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'Europe/London' })
+
+/** Live decision for tomorrow (gate open/closed, forecast coverage) vs a past day replayed as a backtest. */
+function DayStatus({ day, meta }) {
+  if (day !== meta.nextDeliveryDay) {
+    return (
+      <p className="note warn" role="note">
+        Backtest view: {longDay(day)} has already been delivered. This replays the forecasts that were available at its gate
+        and, where known, compares them with what actually happened.
+      </p>
+    )
+  }
+  const missing = meta.nextHalfHours - meta.nextCovered
+  return (
+    <p className="note warn" role="status">
+      <b>Live decision for {longDay(day)}.</b>{' '}
+      {meta.gateClosed
+        ? `The auction gate closed at ${dateTime(meta.nextGate)} UK; the figures below use the forecasts published before it.`
+        : `The auction gate closes at ${dateTime(meta.nextGate)} UK. Until then the figures update as new forecasts are published.`}
+      {missing > 0 && ` Only ${meta.nextCovered} of ${meta.nextHalfHours} half-hours have pre-gate demand and wind forecasts in the latest data (refreshed ${meta.lastRefresh ? dateTime(meta.lastRefresh) : '–'} UK). The wind forecast normally lands at about 09:30 and the demand forecast at about 08:45; the next data refresh will fill the rest.`}
+    </p>
+  )
+}
+
 export default function Decision({ meta }) {
-  const [day, setDay] = useState(meta.latestDecisionDay)
+  const [day, setDay] = useState(meta.nextDeliveryDay)
   const [data, setData] = useState(null)
   const [err, setErr] = useState(null)
 
@@ -41,16 +65,19 @@ export default function Decision({ meta }) {
       <div className="controls">
         <label>
           Delivery day
-          <input type="date" min={meta.dataStart} max={meta.latestDecisionDay} value={day ?? ''} onChange={(e) => e.target.value && setDay(e.target.value)} />
+          <input type="date" min={meta.dataStart} max={meta.nextDeliveryDay} value={day ?? ''} onChange={(e) => e.target.value && setDay(e.target.value)} />
         </label>
+        {day !== meta.nextDeliveryDay && (
+          <button className="btn btn-secondary" onClick={() => setDay(meta.nextDeliveryDay)}>Back to tomorrow</button>
+        )}
       </div>
+      <DayStatus day={day} meta={meta} />
       <p className="note">
         Portfolio share {(meta.share * 100).toFixed(1)}% of GB National Demand. Need = share × (demand forecast − wind),
         using only forecasts published before the gate ({data ? `${dateTime(data.gate)} UK` : '11:00 D-1'}). Uncertainty is the
         combined demand + wind (residual) error from days up to D-2, using whichever model scored best recently.
         Solar is not subtracted: National Demand already nets off embedded solar.
       </p>
-      {!meta.latestDecisionDay && <p className="status">No delivery day has complete pre-gate forecasts yet.</p>}
       {err && <p className="status error">Could not load data: {err}</p>}
       {day && !data && !err && <p className="status">Loading…</p>}
       {data && (

@@ -1,9 +1,14 @@
 name: Refresh Elexon snapshot
 
 on:
+  # GitHub's scheduled runs are best-effort (often 10 min to hours late), so several runs cover the pre-gate window.
+  # Last pre-gate WINDFOR: 09:30 UTC in GMT (gate 11:00 UTC), 08:30 UTC in BST (gate 10:00 UTC).
   schedule:
-    - cron: "45 9 * * *"  # after the ~08:45 NDF and 09:30 WINDFOR runs, before the 11:00 UK gate (GMT and BST)
-    - cron: "30 0 * * *"  # complete yesterday's actuals
+    - cron: "40 8 * * *"   # BST: after the 08:30 UTC wind forecast
+    - cron: "40 9 * * *"   # GMT: after the 09:30 UTC wind forecast
+    - cron: "10 10 * * *"
+    - cron: "35 10 * * *"
+    - cron: "30 0 * * *"   # complete yesterday's actuals
   workflow_dispatch:
 
 permissions:

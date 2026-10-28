@@ -31,11 +31,11 @@ export default function Hero({ meta, onOpenDecision }) {
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
-    if (!meta?.latestDecisionDay) return
-    fetch(`/api/decision?day=${meta.latestDecisionDay}`)
+    if (!meta?.nextDeliveryDay) return
+    fetch(`/api/decision?day=${meta.nextDeliveryDay}`)
       .then((r) => (r.ok ? r.json() : null))
       .then(setDec, () => setDec(null))
-  }, [meta?.latestDecisionDay])
+  }, [meta?.nextDeliveryDay])
 
   const rec = dec?.recommendation
   const buy = dec?.totals.buyRecommended ?? dec?.totals.buyExpected
@@ -63,9 +63,11 @@ export default function Hero({ meta, onOpenDecision }) {
 
       <div className="hero-stats" aria-live="polite">
         <Stat
-          value={buy != null ? `${buy.toLocaleString()} MWh` : '–'}
-          label={meta?.latestDecisionDay ? `To buy for ${longDay(meta.latestDecisionDay)}` : 'To buy'}
-          sub={meta ? `${(meta.share * 100).toFixed(1)}% portfolio share` : null}
+          value={buy != null ? `${buy.toLocaleString()} MWh` : 'Awaiting forecasts'}
+          label={meta?.nextDeliveryDay ? `To buy for ${longDay(meta.nextDeliveryDay)}` : 'To buy'}
+          sub={meta && (buy != null
+            ? `${(meta.share * 100).toFixed(1)}% share · gate ${meta.gateClosed ? 'closed' : `closes ${clock(meta.nextGate)}`}`
+            : `${meta.nextCovered} of ${meta.nextHalfHours} half-hours forecast so far`)}
         />
         <Stat
           value={rec ? `P${Math.round(rec.q * 100)}` : 'P50'}

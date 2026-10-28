@@ -2,7 +2,7 @@
 import math
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -83,8 +83,14 @@ def meta():
     actual_days = sorted(core.local_day(t) for t in data["wind_hh"])
     last = max(core.local_day(t) for t in data["ndf"])
     latest = next((d for d in (last - timedelta(days=i) for i in range(7)) if complete(d)), None)
+    # The desk always decides for tomorrow (London), at today's 11:00 gate.
+    now = datetime.now(core.UTC)
+    nxt = now.astimezone(core.LONDON).date() + timedelta(days=1)
+    gate = core.gate_cutoff(core.half_hours(nxt)[0])
     return {
         "dataStart": actual_days[0].isoformat(), "dataEnd": actual_days[-1].isoformat(),
+        "nextDeliveryDay": nxt.isoformat(), "nextGate": core.iso(gate), "gateClosed": now >= gate,
+        "nextHalfHours": len(core.half_hours(nxt)), "nextCovered": len(risk().rows_by_day.get(nxt, ())),
         "latestDecisionDay": latest and latest.isoformat(), "lastRefresh": data["lastRefresh"],
         "share": portfolio_share(), "riskAversion": risk_aversion(),
     }

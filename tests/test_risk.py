@@ -97,6 +97,7 @@ def test_decision_never_uses_post_gate_wind():
     assert {row["windFc"] for row in dec["rows"]} == {10000}
     assert dec["gate"] == f"{d - timedelta(days=1)}T11:00:00Z"
     assert dec["bandModel"]["name"] in ("wind_only", "combined", "conditional")
+    assert 0.5 < dec["bandModel"]["coverage90"] <= 1
     t = dec["totals"]
     assert t["buyExpected"] <= t["buyConservative"]
     assert dec["recommendation"] is None and t["buyRecommended"] is None  # < 180 priced days: no policy yet

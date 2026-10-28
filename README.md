@@ -14,7 +14,7 @@ Stack: React (Vite + Recharts 3) · Python (FastAPI) · Docker · Vercel · GitH
 
 | Tab | What it shows |
 |---|---|
-| **Decision** | For a delivery day (default: the latest one with complete pre-gate data): <ul><li>MW to buy at P50 (expected), at the monthly **policy** level, and at P90 (conservative)</li><li>daily MWh totals</li><li>which uncertainty model is in use</li><li>pre-gate risk warnings (forecast revision, wind ramp), with margin shown as context</li><li>the publish times used</li><li>for past days, the realised need as a hindsight check</li><li>a half-hourly table</li></ul> |
+| **Decision** | For a delivery day (default: **tomorrow**, the day the desk is buying for; earlier days are replayed as backtests): <ul><li>MW to buy at P50 (expected), at the monthly **policy** level, and at P90 (conservative)</li><li>daily MWh totals</li><li>which uncertainty model is in use</li><li>pre-gate risk warnings (forecast revision, wind ramp), with margin shown as context</li><li>the publish times used</li><li>for past days, the realised need as a hindsight check</li><li>a half-hourly table</li></ul> |
 | **Risk & cost** | £ backtest of buying at P50, at the policy level and at P90 vs perfect hindsight (excess £, CVaR95); the cost-vs-risk frontier by purchase level; out-of-sample scores and a calibration chart for the three uncertainty models; forecast error vs imbalance spread; the risk flags' track record. |
 | **Wind accuracy** | WINDFOR or DGWS, gate or fixed lead time, and presets (January 2026, last 30 days, last 12 months). Shows forecast vs actual with an out-of-sample P10–P90 band, KPI tiles, a source comparison, MAE vs lead time for both sources, the error histogram, MAE by UK hour, and daily bias. |
 | **Solar accuracy** | DGWS solar vs AGWS, daylight periods only. Same views as wind. |
@@ -36,7 +36,11 @@ Stack: React (Vite + Recharts 3) · Python (FastAPI) · Docker · Vercel · GitH
 **Storage:**
 - The snapshot is stored as monthly gzip partitions in `monitor/data/<dataset>/<YYYY-MM>.json.gz` (a few MB in total).
 - It covers a rolling 13 months, plus **pinned Dec 2025 and Jan 2026**, so the original brief stays reproducible.
-- **Refresh:** `.github/workflows/refresh.yml` runs `scripts/fetch_data.py` daily at 09:45 UTC (before the gate) and 00:30 UTC (yesterday's actuals). It commits the changed partitions, and Vercel's Git integration redeploys.
+- **Live overlay for tomorrow** (`monitor/live.py`): when the page loads, the API asks Elexon directly for any WINDFOR and NDF publishes for the next delivery day.
+  - It only asks for publishes since the snapshot (window: from the later of gate − 26h and the last refresh − 1h, up to the earlier of now and the gate).
+  - It merges them in memory and caches the result for 5 minutes. A check of the full 26h window took about 1.6s.
+  - If Elexon fails, the app keeps serving the snapshot and says so in the UI. Tomorrow's decision therefore no longer depends on the scheduled job running on time.
+- **Snapshot refresh** (history and backtests): `.github/workflows/refresh.yml` runs `scripts/fetch_data.py` several times in the pre-gate window (08:40, 09:40, 10:10, 10:35 UTC) and at 00:30 UTC for yesterday's actuals. It commits the changed partitions, and Vercel's Git integration redeploys. GitHub's scheduled runs are best-effort and can be hours late; the live overlay covers that.
 
 ```bash
 python scripts/fetch_data.py                 # current + previous month
@@ -201,6 +205,7 @@ Docker is for local and self-hosted runs only.
 api/index.py              FastAPI routes (the only Vercel function)
 monitor/core.py           pure logic: selection, metrics, rolling bands, MW-to-buy
 monitor/risk.py           residual bands, champion, £ backtest, purchase policy, flags
+monitor/live.py           live Elexon top-up for tomorrow (5-minute cache, snapshot fallback)
 monitor/data.py           loads the partitions
 monitor/data/             Elexon snapshot (monthly .json.gz)
 scripts/fetch_data.py     snapshot refresh / backfill / retention

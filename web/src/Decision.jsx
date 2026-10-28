@@ -16,7 +16,7 @@ const MODEL_NAMES = { wind_only: 'wind-only', combined: 'demand + wind', conditi
 const longDay = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'Europe/London' })
 
 /** Live decision for tomorrow (gate open/closed, forecast coverage) vs a past day replayed as a backtest. */
-function DayStatus({ day, meta }) {
+function DayStatus({ day, meta, live }) {
   if (day !== meta.nextDeliveryDay) {
     return (
       <p className="note warn" role="note">
@@ -32,7 +32,9 @@ function DayStatus({ day, meta }) {
       {meta.gateClosed
         ? `The auction gate closed at ${dateTime(meta.nextGate)} UK; the figures below use the forecasts published before it.`
         : `The auction gate closes at ${dateTime(meta.nextGate)} UK. Until then the figures update as new forecasts are published.`}
-      {missing > 0 && ` Only ${meta.nextCovered} of ${meta.nextHalfHours} half-hours have pre-gate demand and wind forecasts in the latest data (refreshed ${meta.lastRefresh ? dateTime(meta.lastRefresh) : '–'} UK). The wind forecast normally lands at about 09:30 and the demand forecast at about 08:45; the next data refresh will fill the rest.`}
+      {live?.ok && ` Forecasts checked live with Elexon at ${dateTime(live.fetchedAt)} UK.`}
+      {live && !live.ok && ` Elexon could not be reached just now (${live.error}); showing the stored data from ${meta.lastRefresh ? dateTime(meta.lastRefresh) : '–'} UK.`}
+      {missing > 0 && ` Only ${meta.nextCovered} of ${meta.nextHalfHours} half-hours have demand and wind forecasts so far. The wind forecast normally lands at about 09:30 and the demand forecast at about 08:45 UK${meta.gateClosed ? '' : '; reload to pick up new publishes (Elexon is checked at most every 5 minutes)'}.`}
     </p>
   )
 }
@@ -71,7 +73,7 @@ export default function Decision({ meta }) {
           <button className="btn btn-secondary" onClick={() => setDay(meta.nextDeliveryDay)}>Back to tomorrow</button>
         )}
       </div>
-      <DayStatus day={day} meta={meta} />
+      <DayStatus day={day} meta={meta} live={data?.live ?? meta.live} />
       <p className="note">
         Portfolio share {(meta.share * 100).toFixed(1)}% of GB National Demand. Need = share × (demand forecast − wind),
         using only forecasts published before the gate ({data ? `${dateTime(data.gate)} UK` : '11:00 D-1'}). Uncertainty is the

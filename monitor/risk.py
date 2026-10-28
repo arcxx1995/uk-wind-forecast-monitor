@@ -6,7 +6,7 @@ error eR = R - R^  (positive => more had to be bought than forecast).
 Everything for delivery day D uses only days <= D-2 (fully known at the D-1 gate) - out-of-sample by construction.
 """
 import math
-from bisect import bisect_right
+from bisect import bisect_right, insort
 from collections import defaultdict
 from datetime import date, timedelta
 from functools import lru_cache
@@ -68,16 +68,31 @@ class Risk:
         self.wind_err_by_day = data["wind_err_by_day"]  # {iso day: [hourly WINDFOR gate errors]}
         self.rows_by_day = defaultdict(list)
         for t in sorted(self.ndf):
-            n, w = select(self.ndf, t), select(self.wind_idx, t.replace(minute=0))
-            if not n or not w:
-                continue
-            rhat = n[1] - w[1]
-            a_nd, a_w = self.nd.get(t), self.wind.get(t)
-            r = a_nd - a_w if a_nd is not None and a_w is not None else None
-            self.rows_by_day[local_day(t)].append({
-                "t": t, "rhat": rhat, "r": r, "e": None if r is None else r - rhat, "wfc": w[1],
-                "peak": t.astimezone(LONDON).hour in PEAK_HOURS, "ndf": n[1], "ndfP": n[0], "windP": w[0],
-            })
+            if row := self._row(t):
+                self.rows_by_day[local_day(t)].append(row)
+
+    def _row(self, t):
+        """Residual row for half-hour t from the latest pre-gate demand and wind forecasts, or None."""
+        n, w = select(self.ndf, t), select(self.wind_idx, t.replace(minute=0))
+        if not n or not w:
+            return None
+        rhat = n[1] - w[1]
+        a_nd, a_w = self.nd.get(t), self.wind.get(t)
+        r = a_nd - a_w if a_nd is not None and a_w is not None else None
+        return {
+            "t": t, "rhat": rhat, "r": r, "e": None if r is None else r - rhat, "wfc": w[1],
+            "peak": t.astimezone(LONDON).hour in PEAK_HOURS, "ndf": n[1], "ndfP": n[0], "windP": w[0],
+        }
+
+    def add_live(self, d, ndf_rows, wind_rows):
+        """Merge freshly fetched (publish, target, mw) forecasts for delivery day d and rebuild that day's rows.
+        Only day d changes; bands, scores and policies use days <= D-2 and are unaffected."""
+        for idx, rows in ((self.ndf, ndf_rows), (self.wind_idx, wind_rows)):
+            for p, t, mw in rows:
+                cands = idx.setdefault(t, [])
+                if not any(c[0] == p for c in cands):
+                    insort(cands, (p, mw))
+        self.rows_by_day[d] = [row for t in half_hours(d) if (row := self._row(t))]
 
     # ---------- uncertainty models ----------
     def samples(self, d, window):
@@ -207,6 +222,9 @@ class Risk:
     # ---------- risk flags ----------
     @lru_cache(maxsize=None)
     def day_signals(self, d):
+        return self._signals(d)
+
+    def _signals(self, d):
         """Pre-gate signals for day d: forecast revision vs a day earlier, max hourly ramp, margin surplus."""
         hours = sorted({t.replace(minute=0) for t in half_hours(d)})
         gate = gate_cutoff(hours[0])
@@ -223,7 +241,7 @@ class Risk:
 
     def flags(self, d):
         """Signals for day d compared with their own trailing distribution (P90 high, or P10 low for margin)."""
-        sig = self.day_signals(d)
+        sig = self._signals(d)  # uncached: day d may just have received live forecasts
         out = []
         # margin is context only: tight-margin days proved calmer and cheaper in the backtest
         for key, label, window, tail, kind in (("revision", "Forecast revised a lot vs a day earlier", WIN["eval"], "high", "warning"),

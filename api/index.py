@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Query
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # Vercel runs this file directly
 from monitor import core  # noqa: E402
 from monitor.data import load  # noqa: E402
+from monitor import live  # noqa: E402
 from monitor.risk import Risk  # noqa: E402
 
 MAX_RANGE_DAYS = 400
@@ -69,6 +70,11 @@ def parse_range(start, end):
     return s, e
 
 
+def next_delivery_day():
+    """The desk always decides for tomorrow (London), at today's 11:00 gate."""
+    return datetime.now(core.UTC).astimezone(core.LONDON).date() + timedelta(days=1)
+
+
 def complete(d):
     """Every half-hour of day d has both a pre-gate demand and wind forecast."""
     return len(risk().rows_by_day.get(d, ())) == len(core.half_hours(d))
@@ -80,27 +86,28 @@ app = FastAPI(title="Renewables Forecast Monitor")
 @app.get("/api/meta")
 def meta():
     data = load()
+    now = datetime.now(core.UTC)
+    nxt = next_delivery_day()
+    gate = core.gate_cutoff(core.half_hours(nxt)[0])
+    live_status = live.refresh(risk(), nxt, data["lastRefresh"])  # top up tomorrow before reporting coverage
     actual_days = sorted(core.local_day(t) for t in data["wind_hh"])
     last = max(core.local_day(t) for t in data["ndf"])
     latest = next((d for d in (last - timedelta(days=i) for i in range(7)) if complete(d)), None)
-    # The desk always decides for tomorrow (London), at today's 11:00 gate.
-    now = datetime.now(core.UTC)
-    nxt = now.astimezone(core.LONDON).date() + timedelta(days=1)
-    gate = core.gate_cutoff(core.half_hours(nxt)[0])
     return {
         "dataStart": actual_days[0].isoformat(), "dataEnd": actual_days[-1].isoformat(),
         "nextDeliveryDay": nxt.isoformat(), "nextGate": core.iso(gate), "gateClosed": now >= gate,
         "nextHalfHours": len(core.half_hours(nxt)), "nextCovered": len(risk().rows_by_day.get(nxt, ())),
-        "latestDecisionDay": latest and latest.isoformat(), "lastRefresh": data["lastRefresh"],
+        "latestDecisionDay": latest and latest.isoformat(), "lastRefresh": data["lastRefresh"], "live": live_status,
         "share": portfolio_share(), "riskAversion": risk_aversion(),
     }
 
 
 @app.get("/api/decision")
 def decision(day: date):
+    live_status = live.refresh(risk(), day, load()["lastRefresh"]) if day == next_delivery_day() else None
     if not risk().rows_by_day.get(day):
         raise HTTPException(404, f"no pre-gate forecasts for {day}")
-    return risk().decision(day, portfolio_share(), risk_aversion())
+    return {**risk().decision(day, portfolio_share(), risk_aversion()), "live": live_status}
 
 
 @app.get("/api/risk")

@@ -49,7 +49,7 @@ export default function Hero({ meta, onOpenDecision }) {
 
   return (
     <header className="hero">
-      <p className="hero-eyebrow">GB day-ahead power · Elexon BMRS data · refreshed daily</p>
+      <p className="hero-eyebrow">GB day-ahead power · live Elexon BMRS forecasts · 12 months of history</p>
       <h1 className="hero-title">Day-ahead renewables forecasts, their real accuracy, and the cost of every purchase level</h1>
       <p className="hero-sub">
         For the day-ahead desk: how much power to buy for each half-hour of tomorrow, before the 11:00 auction gate.
@@ -82,7 +82,7 @@ export default function Hero({ meta, onOpenDecision }) {
         <Stat
           value={windPub ? clock(windPub) : '–'}
           label="Wind forecast used"
-          sub={meta?.lastRefresh ? `data refreshed ${dateTime(meta.lastRefresh)}` : null}
+          sub={meta?.live?.ok ? `checked live with Elexon ${clock(meta.live.fetchedAt)}` : meta?.lastRefresh ? `stored data from ${dateTime(meta.lastRefresh)}` : null}
         />
       </div>
 

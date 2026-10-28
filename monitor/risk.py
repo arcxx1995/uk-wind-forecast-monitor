@@ -237,6 +237,12 @@ class Risk:
             out.append({"key": key, "label": label, "kind": kind, "value": sig[key], "threshold": round(thr), "flagged": on})
         return out
 
+    def coverage90(self, d, m):
+        """Share of the last 90 days' half-hours (up to D-2) where need stayed at or below model m's P90."""
+        evs = [e for x in days_back(d, 2, WIN["eval"] + 1) if m and (e := self.day_eval(x, m))]
+        n = sum(e["n"] for e in evs)
+        return round(sum(e["coverage"][0.9] * e["n"] for e in evs) / n, 3) if n else None
+
     # ---------- decision table ----------
     def decision(self, d, share, lam):
         m = self.champion(d)
@@ -260,7 +266,7 @@ class Risk:
         mwh = lambda k: round(sum(r[k] for r in rows) * 0.5) if all(r[k] is not None for r in rows) else None
         return {
             "day": d.isoformat(), "share": share, "gate": iso(gate_cutoff(half_hours(d)[0])),
-            "bandModel": {"name": m, "scores": self.scores(d)},
+            "bandModel": {"name": m, "scores": self.scores(d), "coverage90": self.coverage90(d, m)},
             "recommendation": rec, "flags": self.flags(d), "rows": rows,
             "totals": {k: mwh(k) for k in ("buyExpected", "buyRecommended", "buyConservative", "buyActual")},
         }

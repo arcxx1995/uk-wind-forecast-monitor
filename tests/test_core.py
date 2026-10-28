@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 
 from monitor.core import (
-    core_stats, decision, gate_cutoff, half_hours, hourly, index_forecasts, mw_to_buy, pairs, rolling_band, ts,
+    core_stats, gate_cutoff, half_hours, hourly, index_forecasts, mw_to_buy, pairs, rolling_band, ts,
 )
 
 UTC = timezone.utc
@@ -75,16 +75,3 @@ def test_mw_to_buy_scales_and_floors_at_zero():
     assert mw_to_buy(30000, 10000, 0.05) == 1000
     assert mw_to_buy(10000, 30000, 0.05) == 0
     assert mw_to_buy(None, 10000, 0.05) is None
-
-
-def test_decision_uses_pre_gate_forecasts_and_band():
-    d = date(2026, 1, 15)
-    hh = half_hours(d)
-    pre, late = ts("2026-01-14T09:00:00Z"), ts("2026-01-14T12:00:00Z")
-    ndf = index_forecasts([(pre, t, 30000) for t in hh] + [(late, t, 99999) for t in hh])
-    wind = index_forecasts([(pre, t.replace(minute=0), 10000) for t in hh])
-    out = decision(d, ndf, wind, {"p10": -4000, "p50": -2000, "p90": 500}, 0.1, {}, {})
-    r = out["rows"][0]
-    assert (r["ndf"], r["windP50"], r["windP10"], r["buyExpected"], r["buyConservative"]) == (30000, 8000, 6000, 2200, 2400)
-    assert out["totals"]["buyExpected"] == 2200 * 48 * 0.5 and out["totals"]["buyActual"] is None
-    assert out["gate"] == "2026-01-14T11:00:00Z"

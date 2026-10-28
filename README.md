@@ -14,7 +14,8 @@ Stack: React (Vite + Recharts 3) · Python (FastAPI) · Docker · Vercel · GitH
 
 | Tab | What it shows |
 |---|---|
-| **Decision** | For a delivery day (default: the latest one with complete pre-gate data): <ul><li>MW to buy, expected and conservative, with the risk buffer between them</li><li>daily MWh totals</li><li>the publish times used</li><li>for past days, the realised need as a hindsight check</li><li>a half-hourly table</li></ul> |
+| **Decision** | For a delivery day (default: the latest one with complete pre-gate data): <ul><li>MW to buy at P50 (expected), at the monthly **policy** level, and at P90 (conservative)</li><li>daily MWh totals</li><li>which uncertainty model is in use</li><li>pre-gate risk warnings (forecast revision, wind ramp), with margin shown as context</li><li>the publish times used</li><li>for past days, the realised need as a hindsight check</li><li>a half-hourly table</li></ul> |
+| **Risk & cost** | £ backtest of buying at P50, at the policy level and at P90 vs perfect hindsight (excess £, CVaR95); the cost-vs-risk frontier by purchase level; out-of-sample scores and a calibration chart for the three uncertainty models; forecast error vs imbalance spread; the risk flags' track record. |
 | **Wind accuracy** | WINDFOR or DGWS, gate or fixed lead time, and presets (January 2026, last 30 days, last 12 months). Shows forecast vs actual with an out-of-sample P10–P90 band, KPI tiles, a source comparison, MAE vs lead time for both sources, the error histogram, MAE by UK hour, and daily bias. |
 | **Solar accuracy** | DGWS solar vs AGWS, daylight periods only. Same views as wind. |
 
@@ -28,6 +29,9 @@ Stack: React (Vite + Recharts 3) · Python (FastAPI) · Docker · Vercel · GitH
 | Demand actual | `demand/outturn` | `initialDemandOutturn` (ND) |
 | Solar & wind on/offshore forecast | `DGWS` | Half-hourly. The day-ahead run lands **~16:45 UTC on D-1, after the gate** |
 | Solar & wind on/offshore actual | `AGWS` | Half-hourly. Latest revision wins. Has gaps in some summer months. |
+| Day-ahead price proxy | `MID` (APXMIDP) | Half-hourly APX market index. **Not** the EPEX/N2EX auction price (that isn't on Elexon) |
+| Imbalance price | `balancing/settlement/system-prices/{date}` | GB **single** cash-out price (SSP = SBP), plus net imbalance volume. One API call per day |
+| Margin | `OCNMFD` | NESO daily surplus margin, published ~11:09 for D+2 onwards. (LOLP/de-rated margin only reach 12h ahead, so they are not available at the gate.) |
 
 **Storage:**
 - The snapshot is stored as monthly gzip partitions in `monitor/data/<dataset>/<YYYY-MM>.json.gz` (a few MB in total).
@@ -61,11 +65,32 @@ python scripts/fetch_data.py --months 2026-01,2026-02
 
 **MW-to-buy**
 - Need = `share × max(0, NDF − wind)` per half-hour.
-  - **Expected:** wind = WINDFOR + rolling P50 error (bias-corrected).
-  - **Conservative:** wind = WINDFOR + rolling P10 error (wind met in about 90% of recent periods).
+  - Expected, policy and conservative quantities come from the residual band below (P50, the monthly policy level, and P90 of need).
   - `share` comes from the `PORTFOLIO_SHARE` env var (default `0.05`). It is a proxy for the client's own demand.
 - **Solar is not subtracted.** National Demand already nets off embedded generation, and GB solar is mostly embedded.
 - **Scope matters.** AGWS wind (which includes embedded wind) runs about 1.5 GW above FUELHH (transmission only) on average. WINDFOR tracks the wider scope. Correcting WINDFOR by its error against **FUELHH** re-scales it to the transmission wind that actually offsets National Demand. The backtest in the notebook checks this.
+
+**Uncertainty: residual band, champion/challenger** (`monitor/risk.py`)
+- Residual forecast `R̂ = NDF − WINDFOR(gate)`; actual `R = ND − FUELHH`; error `eR = R − R̂`.
+- Purchase at quantile q: `share × max(0, R̂ + Q_q(eR))`. Expected = P50, conservative = P90 of need.
+- Three models, each built for day D only from days ≤ D-2:
+  - **wind-only:** the earlier method, mirrored to the residual.
+  - **demand + wind:** trailing 30 days of eR.
+  - **conditional:** trailing 60 days of eR, split by wind-forecast tercile × evening peak (16:00–19:30 UK). Falls back to demand + wind when a bucket has fewer than 100 samples.
+- Each day uses the model with the lowest mean pinball loss (q = 0.1/0.5/0.9) over the trailing 90 days.
+
+**£ cost and purchase policy**
+- **Excess £ vs perfect hindsight**, per half-hour: `(need − buy) × (imbalance price − APX) × 0.5h`. Shortfalls settle at the imbalance price instead of the day-ahead price; surpluses are sold back at it.
+- **Purchase policy:** for each month, the quantile in {P50…P95} that minimises `mean daily excess £ + λ × CVaR95`.
+  - It is computed over **all** priced history before the month (an expanding window), and needs 180 days of it.
+  - `λ` comes from the `RISK_AVERSION` env var (default `0.5`).
+  - It is labelled **recommended** only when its own out-of-sample track record (at least 60 days) matches or beats always-P50 and always-P90 on that objective.
+  - A rolling 90-day version was tried first and lost to both fixed rules, so it was replaced.
+
+**Pre-gate flags** (each against its own trailing distribution)
+- **Revision:** mean |WINDFOR at the gate − WINDFOR from a day earlier|, flagged above P90.
+- **Ramp:** largest hourly change in the gate forecast, flagged above P90.
+- **Margin:** NESO surplus margin, below P10. Shown as context only: tight-margin days were historically calmer.
 
 ## Key findings
 
@@ -80,14 +105,23 @@ Last 12 months (Oct 2025 → Oct 2026). The notebook reproduces these with the a
 
 **Error vs lead time.** Error grows slowly with lead time: in January 2026, MAE was 1.8 GW at 0 h and 2.4 GW at 48 h. The scope/bias effect dominates.
 
-**Out-of-sample P10 band.**
+**Out-of-sample P10 band** (wind-only, as shown on the Wind accuracy tab).
 - Actual wind sat at or above the conservative line in **88.4%** of hours (target 90%).
 - The weakest month was Sep 2026 at 74%, when summer turned to autumn.
 
-**MW-to-buy backtest** (384 days, 5% share):
-- Daily error of the expected quantity: MAE 1,551 MWh, bias +200 MWh.
-- The conservative quantity covered the realised need on **90%** of days.
-- The average buffer was about 2.8 GWh/day.
+
+**Purchase decision (12 months, 5% share).**
+
+| Model (out-of-sample) | Pinball | P10 / P50 / P90 coverage |
+|---|---|---|
+| Wind-only (previous) | 544 | 15.3% / 47.7% / 84.5% |
+| Demand + wind | 535 | 10.3% / 49.0% / 88.1% |
+| **Conditional** (used on every day) | **476** | 10.4% / 50.2% / 88.8% |
+
+- **Need sizing:** P90-of-need covered the realised need on **95%** of 386 days, for an average buffer of about 2.7 GWh/day. The P50 quantity was off by MAE 1.3 GWh/day, with a bias of −0.1 GWh.
+- **Prices barely react to this forecast error.** The correlation between residual error and (imbalance − APX) is **0.06**; the mean spread is £0.6/MWh.
+- **The value of a buffer is tail-risk reduction, not average saving.** Across the year, P50 vs P90 differ by about 1% in total excess £ over the policy period. The policy currently settles on **P50** at λ = 0.5.
+- **Flags:** ramp days had MAE 2.33 vs 1.93 GW and excess cost £6.9k vs £4.0k/day, so the ramp flag is useful. The revision flag is mildly useful. Tight-margin days were *cheaper* (£1.0k vs £4.7k/day).
 
 **DGWS timing.** DGWS's day-ahead run lands at about 16:45 UTC on D-1, after the 11:00 gate. It can be scored for accuracy but not traded on. WINDFOR (09:30) and NDF (08:45) are the only inputs available at the gate.
 
@@ -100,7 +134,7 @@ Full analysis: [`notebooks/analysis.ipynb`](notebooks/analysis.ipynb).
 ```bash
 # API
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-PORTFOLIO_SHARE=0.05 .venv/bin/uvicorn api.index:app --port 8000
+PORTFOLIO_SHARE=0.05 RISK_AVERSION=0.5 .venv/bin/uvicorn api.index:app --port 8000
 
 # Web (proxies /api to :8000)
 cd web && npm install && npm run dev        # http://localhost:5173
@@ -109,7 +143,7 @@ cd web && npm install && npm run dev        # http://localhost:5173
 **Docker:**
 
 ```bash
-PORTFOLIO_SHARE=0.05 docker compose up --build   # web http://localhost:8080, api http://localhost:8000
+PORTFOLIO_SHARE=0.05 RISK_AVERSION=0.5 docker compose up --build   # web http://localhost:8080, api http://localhost:8000
 ```
 
 **Tests:**
@@ -138,8 +172,9 @@ The tests cover:
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/meta` | data range, `latestDecisionDay`, `lastRefresh`, `share` |
-| `GET /api/decision?day=YYYY-MM-DD` | half-hourly `ndf, windFc, windP50, windP10, buyExpected, buyConservative`, plus actuals when known; `totals` (MWh); `band`; `gate` |
+| `GET /api/meta` | data range, `latestDecisionDay`, `lastRefresh`, `share`, `riskAversion` |
+| `GET /api/decision?day=YYYY-MM-DD` | half-hourly `ndf, windFc, residualFc, buyExpected, buyRecommended, buyConservative`, plus actuals when known; `totals` (MWh); `bandModel`; `recommendation` (policy q, frontier, track record, `validated`); `flags`; `gate` |
+| `GET /api/risk?start=YYYY-MM-DD&end=YYYY-MM-DD` | `frontier`, `models` (pinball, coverage, champion days), `cumulative` and `realised` excess £ per strategy, error-vs-spread `scatter` + `correlation`, flag track record |
 | `GET /api/accuracy?source=windfor\|dgws_wind\|dgws_solar&mode=gate\|horizon&h=0..48&start&end` | `selection`, `points` (with the out-of-sample `lo`/`hi`), `stats`, `horizonCurve`. The range is at most 400 days. |
 
 ## Deploy (Vercel)
@@ -155,7 +190,7 @@ The tests cover:
 
 **One-time setup:**
 - `vercel git connect`
-- `vercel env add PORTFOLIO_SHARE production`
+- `vercel env add PORTFOLIO_SHARE production` and `vercel env add RISK_AVERSION production`
 - Deployment Protection → Vercel Authentication on **all deployments** (Pro plan). Viewers must be members of the Vercel team, or use a shareable link.
 
 Docker is for local and self-hosted runs only.
@@ -165,11 +200,12 @@ Docker is for local and self-hosted runs only.
 ```
 api/index.py              FastAPI routes (the only Vercel function)
 monitor/core.py           pure logic: selection, metrics, rolling bands, MW-to-buy
+monitor/risk.py           residual bands, champion, £ backtest, purchase policy, flags
 monitor/data.py           loads the partitions
 monitor/data/             Elexon snapshot (monthly .json.gz)
 scripts/fetch_data.py     snapshot refresh / backfill / retention
-tests/test_core.py        pytest
-web/src/                  main.jsx (tabs), Decision.jsx, Accuracy.jsx, charts.jsx
+tests/                    pytest (test_core.py, test_risk.py)
+web/src/                  main.jsx (tabs), Decision.jsx, Risk.jsx, Accuracy.jsx, charts.jsx
 notebooks/analysis.ipynb  analysis
 .github/workflows/        daily refresh
 ```

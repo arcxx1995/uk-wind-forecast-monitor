@@ -49,26 +49,41 @@ def z(d):
     return f"{d.isoformat()}T00:00:00Z"
 
 
-def fetch_month(m):
+def fetch_month(m, only=None):
     start, end = month_bounds(m)
     last = end - timedelta(days=1)
     pub = f"publishDateTimeFrom={z(start)}&publishDateTimeTo={z(end)}"
     sd = f"settlementDateFrom={start}&settlementDateTo={last}"
 
-    out = {
-        "fuelhh_wind": [[r["startTime"], r["generation"]]
-                        for r in get(f"datasets/FUELHH/stream?{sd}&fuelType=WIND")],
-        "demand_outturn": [[r["startTime"], r["initialDemandOutturn"]]
-                           for r in get(f"demand/outturn/stream?{sd}")],
-        "windfor": [[r["publishTime"], r["startTime"], r["generation"]]
-                    for r in get(f"datasets/WINDFOR/stream?{pub}")],
-        "dgws": [[r["publishTime"], r["startTime"], PSR[r["psrType"]], round(r["quantity"])]
-                 for r in get(f"datasets/DGWS/stream?{pub}") if r["psrType"] in PSR],
-        "agws": [[r["publishTime"], r["startTime"], PSR[r["psrType"]], round(r["quantity"])]
-                 for r in get(f"datasets/AGWS/stream?{pub}") if r["psrType"] in PSR],
-        "ndf_gate": fetch_ndf_gate(start, end),
+    sources = {
+        "fuelhh_wind": lambda: [[r["startTime"], r["generation"]]
+                                for r in get(f"datasets/FUELHH/stream?{sd}&fuelType=WIND")],
+        "demand_outturn": lambda: [[r["startTime"], r["initialDemandOutturn"]]
+                                   for r in get(f"demand/outturn/stream?{sd}")],
+        "windfor": lambda: [[r["publishTime"], r["startTime"], r["generation"]]
+                            for r in get(f"datasets/WINDFOR/stream?{pub}")],
+        "dgws": lambda: [[r["publishTime"], r["startTime"], PSR[r["psrType"]], round(r["quantity"])]
+                         for r in get(f"datasets/DGWS/stream?{pub}") if r["psrType"] in PSR],
+        "agws": lambda: [[r["publishTime"], r["startTime"], PSR[r["psrType"]], round(r["quantity"])]
+                         for r in get(f"datasets/AGWS/stream?{pub}") if r["psrType"] in PSR],
+        "ndf_gate": lambda: fetch_ndf_gate(start, end),
+        # APX market index price: day-ahead price proxy (N2EX rows are empty)
+        "mid": lambda: [[r["startTime"], r["price"]]
+                        for r in get(f"datasets/MID/stream?from={z(start)}&to={z(end)}")
+                        if r["dataProvider"] == "APXMIDP" and r["volume"] > 0],
+        "system_prices": lambda: fetch_system_prices(start, end),
+        "ocnmfd": lambda: [[r["publishTime"], r["forecastDate"], r["surplus"]]
+                           for r in get(f"datasets/OCNMFD/stream?{pub}")],
     }
-    return {k: sorted(v) for k, v in out.items()}
+    return {k: sorted(f()) for k, f in sources.items() if not only or k in only}
+
+
+def fetch_system_prices(start, end):
+    """Single imbalance price (SSP == SBP since 2015) + net imbalance volume; the API is per settlement day."""
+    days = [start + timedelta(days=i) for i in range((end - start).days)]
+    with ThreadPoolExecutor(8) as ex:
+        chunks = ex.map(lambda d: get(f"balancing/settlement/system-prices/{d}")["data"], days)
+    return [[r["startTime"], r["systemSellPrice"], round(r["netImbalanceVolume"])] for c in chunks for r in c]
 
 
 def fetch_ndf_gate(start, end):
@@ -113,6 +128,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--months", help="comma-separated YYYY-MM")
     ap.add_argument("--backfill", action="store_true")
+    ap.add_argument("--only", help="comma-separated datasets (default: all)")
     args = ap.parse_args()
 
     today = datetime.now(timezone.utc).date()
@@ -121,7 +137,7 @@ def main():
               else sorted(set(recent) | PINNED) if args.backfill
               else recent[:2])
     for m in months:
-        write(m, fetch_month(m))
+        write(m, fetch_month(m, args.only and args.only.split(",")))
     prune(today)
     (OUT / "_meta.json").write_text(json.dumps({"lastRefresh": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}))
 

@@ -1,4 +1,5 @@
-"""Wind & solar forecast monitor API (FastAPI). Routes only; logic in monitor/core.py, data in monitor/data.py."""
+"""Wind & solar forecast monitor API (FastAPI). Routes only; logic in monitor/core.py + monitor/risk.py, data in monitor/data.py."""
+import math
 import os
 import sys
 from datetime import date, timedelta
@@ -10,18 +11,33 @@ from fastapi import FastAPI, HTTPException, Query
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # Vercel runs this file directly
 from monitor import core  # noqa: E402
 from monitor.data import load  # noqa: E402
+from monitor.risk import Risk  # noqa: E402
 
 MAX_RANGE_DAYS = 400
 
 
-def portfolio_share():
+def env_number(name, default, lo, hi, lo_open=False):
     try:
-        share = float(os.environ.get("PORTFOLIO_SHARE", "0.05"))
+        v = float(os.environ.get(name, default))
     except ValueError:
-        share = -1
-    if not 0 < share <= 1:
-        raise HTTPException(500, "PORTFOLIO_SHARE must be a fraction in (0, 1]")
-    return share
+        v = math.nan
+    if not ((lo < v) if lo_open else (lo <= v)) or not v <= hi:
+        raise HTTPException(500, f"{name} must be a number in {'(' if lo_open else '['}{lo}, {hi}]")
+    return v
+
+
+def portfolio_share():
+    return env_number("PORTFOLIO_SHARE", "0.05", 0, 1, lo_open=True)
+
+
+def risk_aversion():
+    """lambda in: recommended quantile minimises mean daily excess cost + lambda x CVaR95."""
+    return env_number("RISK_AVERSION", "0.5", 0, 10)
+
+
+@lru_cache(maxsize=1)
+def risk():
+    return Risk(load())
 
 
 @lru_cache(maxsize=None)
@@ -53,14 +69,9 @@ def parse_range(start, end):
     return s, e
 
 
-def decision_for(d):
-    data, share = load(), portfolio_share()
-    return core.decision(d, data["ndf"], data["sources"]["windfor"][1], band("windfor", "gate", 0, d),
-                         share, data["nd_actual"], data["wind_hh"])
-
-
-def complete(dec):
-    return all(r["ndf"] is not None and r["windFc"] is not None for r in dec["rows"])
+def complete(d):
+    """Every half-hour of day d has both a pre-gate demand and wind forecast."""
+    return len(risk().rows_by_day.get(d, ())) == len(core.half_hours(d))
 
 
 app = FastAPI(title="Renewables Forecast Monitor")
@@ -71,20 +82,27 @@ def meta():
     data = load()
     actual_days = sorted(core.local_day(t) for t in data["wind_hh"])
     last = max(core.local_day(t) for t in data["ndf"])
-    latest = next((d for d in (last - timedelta(days=i) for i in range(7)) if complete(decision_for(d))), None)
+    latest = next((d for d in (last - timedelta(days=i) for i in range(7)) if complete(d)), None)
     return {
         "dataStart": actual_days[0].isoformat(), "dataEnd": actual_days[-1].isoformat(),
         "latestDecisionDay": latest and latest.isoformat(), "lastRefresh": data["lastRefresh"],
-        "share": portfolio_share(),
+        "share": portfolio_share(), "riskAversion": risk_aversion(),
     }
 
 
 @app.get("/api/decision")
 def decision(day: date):
-    dec = decision_for(day)
-    if not any(r["ndf"] is not None or r["windFc"] is not None for r in dec["rows"]):
+    if not risk().rows_by_day.get(day):
         raise HTTPException(404, f"no pre-gate forecasts for {day}")
-    return dec
+    return risk().decision(day, portfolio_share(), risk_aversion())
+
+
+@app.get("/api/risk")
+def risk_report(start: date, end: date):
+    if not timedelta(0) <= end - start <= timedelta(days=MAX_RANGE_DAYS):
+        raise HTTPException(400, f"end must be after start, at most {MAX_RANGE_DAYS} days")
+    return {"share": portfolio_share(), "riskAversion": risk_aversion(),
+            **risk().report(start, end, portfolio_share(), risk_aversion())}
 
 
 @app.get("/api/accuracy")

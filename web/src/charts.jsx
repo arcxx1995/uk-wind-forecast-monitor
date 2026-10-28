@@ -1,9 +1,10 @@
 import {
   Area, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, LineChart,
-  ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis,
 } from 'recharts'
 
 export const mw = (v) => (v == null ? '–' : `${Math.round(v).toLocaleString()} MW`)
+export const gbp = (v) => (v == null ? '–' : `${v < 0 ? '−' : ''}£${Math.abs(Math.round(v)).toLocaleString()}`)
 export const mwh = (v) => (v == null ? '–' : `${Math.round(v).toLocaleString()} MWh`)
 const gw = (v) => String(+(v / 1000).toFixed(2))
 const TZ = 'Europe/London'
@@ -160,8 +161,9 @@ export function BiasBars({ data }) {
   )
 }
 
-export function BuyChart({ rows }) {
+export function BuyChart({ rows, recQ }) {
   const hasActual = rows.some((r) => r.buyActual != null)
+  const recName = `Buy, recommended (P${Math.round((recQ ?? 0.5) * 100)})`
   return (
     <ResponsiveContainer width="100%" height={340}>
       <ComposedChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -174,21 +176,108 @@ export function BuyChart({ rows }) {
             <Tip
               title={(d) => `${dateTime(d.t)} UK`}
               rows={(d) => [
-                ['Buy, conservative (P10 wind)', mw(d.buyConservative), 'var(--series-2)'],
-                ['Buy, expected (P50 wind)', mw(d.buyExpected), 'var(--series-2)'],
+                ['Buy, conservative (P90)', mw(d.buyConservative), 'var(--series-2)'],
+                [recName, mw(d.buyRecommended), 'var(--series-1)'],
+                ['Buy, expected (P50)', mw(d.buyExpected), 'var(--series-2)'],
                 ...(hasActual ? [['Actual need', mw(d.buyActual), 'var(--series-3)']] : []),
                 ['National demand fc', mw(d.ndf)],
-                ['Wind fc (raw / P50 / P10)', `${mw(d.windFc)} / ${mw(d.windP50)} / ${mw(d.windP10)}`],
+                ['Wind fc', mw(d.windFc)],
               ]}
             />
           }
         />
         {legend}
-        <Area dataKey={(r) => (r.buyExpected == null ? null : [r.buyExpected, r.buyConservative])} name="Risk buffer" stroke="none" fill="var(--series-2)" fillOpacity={0.15} isAnimationActive={false} />
-        <Line dataKey="buyConservative" name="Buy, conservative (P10 wind)" stroke="var(--series-2)" strokeDasharray="4 3" {...line} />
-        <Line dataKey="buyExpected" name="Buy, expected (P50 wind)" stroke="var(--series-2)" {...line} />
+        <Area dataKey={(r) => (r.buyExpected == null ? null : [r.buyExpected, r.buyConservative])} name="P50–P90 range" stroke="none" fill="var(--series-2)" fillOpacity={0.15} isAnimationActive={false} />
+        <Line dataKey="buyConservative" name="Buy, conservative (P90)" stroke="var(--series-2)" strokeDasharray="4 3" {...line} />
+        <Line dataKey="buyExpected" name="Buy, expected (P50)" stroke="var(--series-2)" {...line} strokeWidth={1.5} />
+        {recQ != null && <Line dataKey="buyRecommended" name={recName} stroke="var(--series-1)" {...line} strokeWidth={2.5} />}
         {hasActual && <Line dataKey="buyActual" name="Actual need (hindsight)" stroke="var(--series-3)" {...line} />}
       </ComposedChart>
+    </ResponsiveContainer>
+  )
+}
+
+const pq = (q) => `P${Math.round(q * 100)}`
+const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)']
+
+/** One metric per candidate quantile; the recommended quantile is full strength, others recede. */
+export function FrontierBars({ rows, dataKey, label, recQ }) {
+  return (
+    <ResponsiveContainer width="100%" height={220}>
+      <BarChart data={rows} margin={{ top: 8, right: 8, left: 8, bottom: 0 }} barCategoryGap={8}>
+        {grid}
+        <XAxis dataKey="q" tickFormatter={pq} {...axis} />
+        <YAxis width={56} tickFormatter={(v) => gbp(v)} {...axis} />
+        <Tooltip
+          cursor={{ fill: 'var(--accent-wash)' }}
+          content={<Tip title={(d) => `Buy at ${pq(d.q)}${d.q === recQ ? ' (recommended)' : ''}`} rows={(d) => [
+            [label, gbp(d[dataKey]), 'var(--series-1)'], ['P(short) per half-hour', `${Math.round(d.pShort * 100)}%`],
+            ['Mean shortfall', `${d.shortMWh.toLocaleString()} MWh/day`], ['Days', d.days]]} />}
+        />
+        <Bar dataKey={dataKey} radius={[4, 4, 0, 0]} isAnimationActive={false}>
+          {rows.map((r) => <Cell key={r.q} fill="var(--series-1)" fillOpacity={r.q === recQ ? 1 : 0.4} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+/** models: [{model, name, coverage: {q: observed}}] - a calibrated model sits on the diagonal. */
+export function ReliabilityChart({ models }) {
+  const qs = Object.keys(models[0]?.coverage ?? {}).map(Number).sort()
+  const data = qs.map((q) => ({ q, ideal: q, ...Object.fromEntries(models.map((m) => [m.model, m.coverage[String(q)]])) }))
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+        {grid}
+        <XAxis dataKey="q" type="number" domain={[0, 1]} ticks={[0, 0.2, 0.4, 0.6, 0.8, 1]} tickFormatter={pq} {...axis} />
+        <YAxis domain={[0, 1]} width={40} tickFormatter={(v) => `${Math.round(v * 100)}%`} {...axis} />
+        <Tooltip
+          cursor={{ stroke: 'var(--axis)' }}
+          content={<Tip title={(d) => `Nominal ${pq(d.q)}`} rows={(d) => models.map((m, i) => [m.name, `${(d[m.model] * 100).toFixed(1)}%`, SERIES[i]])} />}
+        />
+        {legend}
+        <Line dataKey="ideal" name="Perfect calibration" stroke="var(--muted)" strokeDasharray="3 3" {...line} strokeWidth={1} />
+        {models.map((m, i) => <Line key={m.model} dataKey={m.model} name={m.name} stroke={SERIES[i]} {...line} dot={{ r: 4 }} />)}
+      </LineChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function CumulativeCost({ data }) {
+  const names = { p50: 'Always P50', recommended: 'Monthly policy', p90: 'Always P90' }
+  return (
+    <ResponsiveContainer width="100%" height={280}>
+      <LineChart data={data} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
+        {grid}
+        <XAxis dataKey="day" tickFormatter={day} minTickGap={40} {...axis} />
+        <YAxis width={64} tickFormatter={(v) => gbp(v)} {...axis} />
+        <Tooltip
+          cursor={{ stroke: 'var(--axis)' }}
+          content={<Tip title={(d) => `${day(d.day)} · policy ${pq(d.q)}`} rows={(d) => Object.keys(names).map((k, i) => [names[k], gbp(d[k]), SERIES[i]])} />}
+        />
+        {legend}
+        {Object.entries(names).map(([k, n], i) => <Line key={k} dataKey={k} name={n} stroke={SERIES[i]} {...line} />)}
+      </LineChart>
+    </ResponsiveContainer>
+  )
+}
+
+export function ErrorSpreadScatter({ points }) {
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <ScatterChart margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
+        {grid}
+        <XAxis dataKey="e" type="number" tickFormatter={gw} name="Residual error" unit=" GW" {...axis} />
+        <YAxis dataKey="spread" type="number" width={56} tickFormatter={(v) => gbp(v)} {...axis} />
+        <ReferenceLine x={0} stroke="var(--axis)" />
+        <ReferenceLine y={0} stroke="var(--axis)" />
+        <Tooltip
+          cursor={{ stroke: 'var(--axis)' }}
+          content={<Tip title={() => 'Half-hour'} rows={(d) => [['Residual error (need − fc)', mw(d.e)], ['Imbalance − APX', `£${d.spread}/MWh`]]} />}
+        />
+        <Scatter data={points} fill="var(--series-1)" fillOpacity={0.35} shape="circle" isAnimationActive={false} />
+      </ScatterChart>
     </ResponsiveContainer>
   )
 }

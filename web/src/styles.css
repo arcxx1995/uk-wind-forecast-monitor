@@ -107,3 +107,7 @@ table.compare { margin: 0 0 16px; }
 table caption { text-align: left; color: var(--text-2); font-size: 12px; padding-bottom: 4px; }
 details { overflow-x: auto; }
 .note.warn { color: var(--text); background: var(--accent-wash); border-radius: 8px; padding: 8px 12px; }
+ul.flags { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6px; }
+ul.flags li { background: var(--accent-wash); border-radius: 8px; padding: 6px 10px; color: var(--text); }
+section h3 { margin-top: 16px; }
+.card table { width: 100%; }

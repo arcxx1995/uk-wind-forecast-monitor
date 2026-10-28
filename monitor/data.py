@@ -7,6 +7,9 @@ Stored row schemas (compact lists, ISO-8601 UTC strings):
     dgws            [publish, t, type, mw]     half-hourly day-ahead forecast, type in solar|wind_on|wind_off
     agws            [publish, t, type, mw]     half-hourly actual by type (revisions: latest publish wins)
     ndf_gate        [publish, t, mw]           half-hourly demand forecast, latest publish before the gate only
+    mid             [t, price]                 APX market index price (£/MWh), day-ahead price proxy
+    system_prices   [t, price, niv]            single imbalance price (£/MWh) + net imbalance volume
+    ocnmfd          [publish, date, mw]        NESO daily surplus margin forecast
 """
 import gzip
 import json
@@ -14,7 +17,7 @@ from collections import defaultdict
 from functools import cache
 from pathlib import Path
 
-from monitor.core import NIGHT_MW, hourly, index_forecasts, ts
+from monitor.core import NIGHT_MW, errors_by_day, hourly, index_forecasts, pairs, ts
 
 DATA = Path(__file__).resolve().parent / "data"
 
@@ -64,14 +67,19 @@ def load():
     # AGWS wind includes embedded wind (~1.5 GW above FUELHH on average), so DGWS wind is scored against its own scope.
     agws_wind = {t: mw + agws["wind_off"][t] for t, mw in agws["wind_on"].items() if t in agws["wind_off"]}
     meta = DATA / "_meta.json"
+    windfor = index_forecasts([(ts(p), ts(t), mw) for p, t, mw in rows("windfor")])
     return {
         "wind_hh": wind_hh,
         "nd_actual": {ts(t): mw for t, mw in rows("demand_outturn")},
         "ndf": index_forecasts([(ts(p), ts(t), mw) for p, t, mw in rows("ndf_gate")]),
+        "mid": {ts(t): p for t, p in rows("mid")},
+        "sip": {ts(t): p for t, p, _ in rows("system_prices")},
+        "ocnmfd": index_forecasts([(ts(p), d, mw) for p, d, mw in rows("ocnmfd")]),
+        "wind_err_by_day": errors_by_day(pairs(wind_h, windfor, "gate")),
         "lastRefresh": json.loads(meta.read_text())["lastRefresh"] if meta.exists() else None,
         # source -> (actuals, forecast index, night filter)
         "sources": {
-            "windfor": (wind_h, index_forecasts([(ts(p), ts(t), mw) for p, t, mw in rows("windfor")]), None),
+            "windfor": (wind_h, windfor, None),
             "dgws_wind": (hourly(agws_wind), dgws_index(dgws, {"wind_on", "wind_off"}, to_hourly=True), None),
             "dgws_solar": (agws["solar"], dgws_index(dgws, {"solar"}, to_hourly=False), NIGHT_MW),
         },

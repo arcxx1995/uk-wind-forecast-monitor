@@ -4,6 +4,7 @@ services:
     ports: ["8000:8000"]
     environment:
       PORTFOLIO_SHARE: ${PORTFOLIO_SHARE:-0.05}
+      RISK_AVERSION: ${RISK_AVERSION:-0.5}
   web:
     build: ./web
     ports: ["8080:80"]

@@ -4,11 +4,12 @@ import './styles.css'
 
 const Decision = lazy(() => import('./Decision'))
 const Accuracy = lazy(() => import('./Accuracy'))
+const Risk = lazy(() => import('./Risk'))
 
 // Inlined (not imported from ./charts) so Recharts stays out of the entry chunk.
 const dateTime = (t) =>
   new Date(t).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' })
-const TABS = [['decision', 'Decision'], ['wind', 'Wind accuracy'], ['solar', 'Solar accuracy']]
+const TABS = [['decision', 'Decision'], ['risk', 'Risk & cost'], ['wind', 'Wind accuracy'], ['solar', 'Solar accuracy']]
 const fromHash = () => (TABS.some(([k]) => k === location.hash.slice(1)) ? location.hash.slice(1) : 'decision')
 
 function App() {
@@ -45,7 +46,7 @@ function App() {
       {!meta && !err && <p className="status">Loading…</p>}
       {meta && (
         <Suspense fallback={<p className="status">Loading…</p>}>
-          {tab === 'decision' ? <Decision meta={meta} /> : <Accuracy key={tab} fuel={tab} meta={meta} />}
+          {tab === 'decision' ? <Decision meta={meta} /> : tab === 'risk' ? <Risk meta={meta} /> : <Accuracy key={tab} fuel={tab} meta={meta} />}
         </Suspense>
       )}
     </main>

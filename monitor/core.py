@@ -174,28 +174,3 @@ def mw_to_buy(demand, wind, share):
     if demand is None or wind is None:
         return None
     return round(share * max(0.0, demand - wind))
-
-
-def decision(d, ndf_idx, wind_idx, band, share, nd_actual, wind_actual_hh):
-    """Half-hourly decision table for London delivery day d using only data available before the gate."""
-    rows = []
-    for t in half_hours(d):
-        n = select(ndf_idx, t)
-        w = select(wind_idx, t.replace(minute=0))  # WINDFOR is hourly; both half-hours use the hour value
-        f = w[1] if w else None
-        p50 = max(0, f + band["p50"]) if f is not None and band else f
-        p10 = max(0, f + band["p10"]) if f is not None and band else f
-        demand = n[1] if n else None
-        a_nd, a_w = nd_actual.get(t), wind_actual_hh.get(t)
-        rows.append({
-            "t": iso(t), "ndf": demand, "windFc": f, "windP50": p50, "windP10": p10,
-            "buyExpected": mw_to_buy(demand, p50, share), "buyConservative": mw_to_buy(demand, p10, share),
-            "ndActual": a_nd, "windActual": a_w, "buyActual": mw_to_buy(a_nd, a_w, share),
-            "ndfPublish": iso(n[0]) if n else None, "windPublish": iso(w[0]) if w else None,
-        })
-    mwh = lambda k: round(sum(r[k] for r in rows) * 0.5) if all(r[k] is not None for r in rows) else None
-    return {
-        "day": d.isoformat(), "share": share, "band": band, "gate": iso(gate_cutoff(half_hours(d)[0])),
-        "rows": rows,
-        "totals": {k: mwh(k) for k in ("buyExpected", "buyConservative", "buyActual")},
-    }

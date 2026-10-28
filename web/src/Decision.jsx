@@ -11,6 +11,8 @@ function Tile({ label, value, sub }) {
   )
 }
 
+const MODEL_NAMES = { wind_only: 'wind-only', combined: 'demand + wind', conditional: 'conditional (wind level × peak)' }
+
 export default function Decision({ meta }) {
   const [day, setDay] = useState(meta.latestDecisionDay)
   const [data, setData] = useState(null)
@@ -28,6 +30,9 @@ export default function Decision({ meta }) {
   }, [day])
 
   const t = data?.totals
+  const rec = data?.recommendation
+  const recRow = rec?.rows.find((r) => r.q === rec.q)
+  const margin = data?.flags.find((f) => f.kind === 'info')
   const publishes = (k) => [...new Set(data?.rows.map((r) => r[k]).filter(Boolean))].map(dateTime).join(', ')
 
   return (
@@ -41,40 +46,52 @@ export default function Decision({ meta }) {
       </div>
       <p className="note">
         Portfolio share {(meta.share * 100).toFixed(1)}% of GB National Demand. Need = share × (demand forecast − wind),
-        using only forecasts published before the gate ({data ? `${dateTime(data.gate)} UK` : '11:00 D-1'}).
-        Expected uses wind corrected by its trailing 30-day median error (P50); conservative uses the P10 error, so wind
-        was at least that high in about 90% of recent periods. Solar is not subtracted: National Demand already nets off embedded solar.
+        using only forecasts published before the gate ({data ? `${dateTime(data.gate)} UK` : '11:00 D-1'}). Uncertainty is the
+        combined demand + wind (residual) error from days up to D-2, using whichever model scored best recently.
+        Solar is not subtracted: National Demand already nets off embedded solar.
       </p>
       {!meta.latestDecisionDay && <p className="status">No delivery day has complete pre-gate forecasts yet.</p>}
       {err && <p className="status error">Could not load data: {err}</p>}
       {day && !data && !err && <p className="status">Loading…</p>}
       {data && (
         <>
+          {data.flags.some((f) => f.flagged && f.kind === 'warning') && (
+            <ul className="flags" aria-label="Risk flags">
+              {data.flags.filter((f) => f.flagged && f.kind === 'warning').map((f) => (
+                <li key={f.key}>⚠ {f.label}: {f.value.toLocaleString()} MW (90-day threshold {f.threshold.toLocaleString()} MW)</li>
+              ))}
+            </ul>
+          )}
           <div className="tiles">
-            <Tile label="Expected purchase" value={mwh(t.buyExpected)} sub="P50 wind, whole day" />
-            <Tile label="Conservative purchase" value={mwh(t.buyConservative)} sub="P10 wind, whole day" />
             <Tile
-              label="Risk buffer"
-              value={mwh(t.buyConservative != null && t.buyExpected != null ? t.buyConservative - t.buyExpected : null)}
-              sub="conservative − expected"
+              label={rec ? `${rec.validated ? 'Recommended' : 'Policy level'} P${Math.round(rec.q * 100)}` : 'Recommended purchase'}
+              value={mwh(t.buyRecommended)}
+              sub={rec
+                ? `${rec.validated ? 'matches or beats fixed P50/P90 on its track record' : 'not yet shown to beat fixed P50/P90'} · ${rec.trackDays} days tracked`
+                : 'needs 180 priced days of history'}
             />
+            <Tile label="Expected (P50)" value={mwh(t.buyExpected)} sub="median need, whole day" />
+            <Tile label="Conservative (P90)" value={mwh(t.buyConservative)} sub="need exceeded on ~10% of recent periods" />
             {t.buyActual != null && <Tile label="Actual need (hindsight)" value={mwh(t.buyActual)} sub="from demand + wind outturn" />}
           </div>
-          {!data.band && <p className="note error">Not enough recent error history for a band: P50/P10 fall back to the raw forecast.</p>}
-          <BuyChart rows={data.rows} />
+          <BuyChart rows={data.rows} recQ={rec?.q} />
           <p className="note">
-            Wind forecast published {publishes('windPublish') || '–'} · demand forecast published {publishes('ndfPublish') || '–'} (UK time).
-            {data.band && ` Wind error band (trailing 30 days): P10 ${mw(data.band.p10)}, P50 ${mw(data.band.p50)}.`}
+            Band model: <b>{MODEL_NAMES[data.bandModel.name] ?? '–'}</b> (lowest 90-day pinball loss
+            {Object.entries(data.bandModel.scores).filter(([, v]) => v != null).map(([k, v]) => ` · ${MODEL_NAMES[k]} ${v.toLocaleString()}`).join('')}).
+            {rec && ` Purchase level for ${rec.month.slice(0, 7)} = quantile minimising mean excess £ + ${rec.lambda} × CVaR95 over all ${recRow.days} priced days before the month (risk aversion set by admin; historical ${recRow ? `£${recRow.meanCost.toLocaleString()}/day, worst-5% days £${recRow.cvar95.toLocaleString()}` : ''}).`}
+            {margin && ` NESO surplus margin for the day: ${margin.value.toLocaleString()} MW${margin.flagged ? ' (tight vs past year; historically not a higher-cost signal)' : ''}.`}
+            {' '}Wind forecast published {publishes('windPublish') || '–'} · demand forecast published {publishes('ndfPublish') || '–'} (UK time).
           </p>
+          <p className="note">Decision support only, not trading advice. £ uses the APX market index as a day-ahead price proxy and the GB single imbalance price.</p>
           <details>
             <summary>Half-hourly table</summary>
             <table>
-              <thead><tr><th>Time (UK)</th><th>Demand fc</th><th>Wind fc</th><th>Buy expected</th><th>Buy conservative</th><th>Actual need</th></tr></thead>
+              <thead><tr><th>Time (UK)</th><th>Demand fc</th><th>Wind fc</th><th>Buy expected</th><th>Buy recommended</th><th>Buy conservative</th><th>Actual need</th></tr></thead>
               <tbody>
                 {data.rows.map((r) => (
                   <tr key={r.t}>
                     <td>{dateTime(r.t)}</td><td>{mw(r.ndf)}</td><td>{mw(r.windFc)}</td>
-                    <td>{mw(r.buyExpected)}</td><td>{mw(r.buyConservative)}</td><td>{mw(r.buyActual)}</td>
+                    <td>{mw(r.buyExpected)}</td><td>{mw(r.buyRecommended)}</td><td>{mw(r.buyConservative)}</td><td>{mw(r.buyActual)}</td>
                   </tr>
                 ))}
               </tbody>
